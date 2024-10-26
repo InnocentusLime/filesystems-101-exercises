@@ -54,11 +54,8 @@ void lsof(void)
 
 	while ((ent = x_readdir(proc)) != NULL)
 	{
-		strncpy(path, ent->d_name, BUFFER_SIZE);
-		path[strlen(ent->d_name)] = '\0';
-
 		/* Filter off non-PID stuff */
-		pid = atoi(path);
+		pid = atoi(ent->d_name);
 		if (!pid)
 		{
 			continue;
