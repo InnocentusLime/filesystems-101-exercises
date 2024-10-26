@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define BUFFER_SIZE 255
 
@@ -58,13 +59,30 @@ DIR *x_opendir(const char* name)
 	return res;
 }
 
+int x_lstat(const char *restrict pathname, struct stat *restrict statbuf)
+{
+	int err;
+	int n;
+
+	n = lstat(pathname, statbuf);
+
+	if (n < 0)
+	{
+		err = errno;
+		report_error(pathname, err);
+	}
+
+	return n;
+}
+
 void fds_of(const char* fds, int pid)
 {
 	DIR *fdfs = NULL;
 	struct dirent *ent = NULL;
 	char fd[BUFFER_SIZE + 1];
-	char path[BUFFER_SIZE + 1];
 	int descriptor = 0;
+	struct stat st;
+	char* buff = NULL;
 
 	fdfs = x_opendir(fds);
 	if (!fdfs)
@@ -82,12 +100,19 @@ void fds_of(const char* fds, int pid)
 
 		snprintf(fd, BUFFER_SIZE, "/proc/%d/fd/%d", pid, descriptor);
 
-		if (x_readlink(fd, path, BUFFER_SIZE) < 0)
+		if (x_lstat(fd, &st) < 0)
 		{
 			continue;
 		}
 
-		report_file(path);
+		buff = malloc(st.st_size + 1);
+
+		if (x_readlink(fd, buff, st.st_size) >= 0)
+		{
+			report_file(buff);
+		}
+
+		free(buff);
 	}
 
 	closedir(fdfs);
