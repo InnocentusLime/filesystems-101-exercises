@@ -39,8 +39,10 @@ static ssize_t x_readlink(
 	{
 		report_error(pathname, err);
 	}
-
-	buf[n] = '\0';
+	else
+	{
+		buf[n] = '\0';
+	}
 
 	return n;
 }
@@ -59,21 +61,21 @@ DIR *x_opendir(const char* name)
 	return res;
 }
 
-int x_lstat(const char *restrict pathname, struct stat *restrict statbuf)
-{
-	int err;
-	int n;
+// int x_lstat(const char *restrict pathname, struct stat *restrict statbuf)
+// {
+// 	int err;
+// 	int n;
 
-	n = lstat(pathname, statbuf);
+// 	n = lstat(pathname, statbuf);
 
-	if (n < 0)
-	{
-		err = errno;
-		report_error(pathname, err);
-	}
+// 	if (n < 0)
+// 	{
+// 		err = errno;
+// 		report_error(pathname, err);
+// 	}
 
-	return n;
-}
+// 	return n;
+// }
 
 void fds_of(const char* fds, int pid)
 {
@@ -81,8 +83,8 @@ void fds_of(const char* fds, int pid)
 	struct dirent *ent = NULL;
 	char fd[BUFFER_SIZE + 1];
 	int descriptor = 0;
-	struct stat st;
-	char* buff = NULL;
+	// struct stat st;
+	char buff[PATH_MAX + 1];
 
 	fdfs = x_opendir(fds);
 	if (!fdfs)
@@ -100,19 +102,15 @@ void fds_of(const char* fds, int pid)
 
 		snprintf(fd, BUFFER_SIZE, "/proc/%d/fd/%d", pid, descriptor);
 
-		if (x_lstat(fd, &st) < 0)
-		{
-			continue;
-		}
+		// if (x_lstat(fd, &st) < 0)
+		// {
+		// 	continue;
+		// }
 
-		buff = malloc(st.st_size + 1);
-
-		if (x_readlink(fd, buff, st.st_size) >= 0)
+		if (x_readlink(fd, buff, PATH_MAX) >= 0)
 		{
 			report_file(buff);
 		}
-
-		free(buff);
 	}
 
 	closedir(fdfs);
