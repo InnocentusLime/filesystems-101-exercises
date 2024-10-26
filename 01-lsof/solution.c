@@ -70,4 +70,6 @@ void lsof(void)
 
 		report_file(exe);
 	}
+
+	closedir(proc);
 }
