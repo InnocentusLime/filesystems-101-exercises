@@ -131,13 +131,13 @@ void abspath(const char *path)
 
 		if (strcmp(child, ".") == 0)
 		{
-			continue;
+			goto next;
 		}
 
 		if (strcmp(child, "..") == 0)
 		{
 			assert(chdir("..") == 0);
-			continue;
+			goto next;
 		}
 
 		parent = getcwd(NULL, 0);
@@ -152,7 +152,7 @@ void abspath(const char *path)
 		{
 			if (*child_ptr == '\0')
 			{
-				continue;
+				goto next;
 			}
 
 			if(chdir(child) < 0)
@@ -161,7 +161,7 @@ void abspath(const char *path)
 				goto terminate;
 			}
 
-			continue;
+			goto next;
 		}
 
 		x_readlink(child, &buff);
@@ -171,9 +171,11 @@ void abspath(const char *path)
 		child_ptr = toresolve.mem;
 		assert(chdir("/") == 0);
 
+next:
 		free(parent); parent = NULL;
 	}
 
+	free(parent);
 	parent = getcwd(NULL, 0);
 	path_buff_set(&buff, parent);
 	path_buff_push(&buff, "/");
