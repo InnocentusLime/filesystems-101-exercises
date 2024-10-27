@@ -172,7 +172,7 @@ void abspath(const char *path)
 		{
 			err = errno;
 			report_error(ready.mem, child, err);
-			return;
+			goto terminate;
 		}
 
 		path_buff_push(&ready, child);
@@ -190,7 +190,7 @@ void abspath(const char *path)
 
 		if (x_readlink(&buff, &link) < 0)
 		{
-			return;
+			goto terminate;
 		}
 
 		path_buff_set(&buff, "");
@@ -204,6 +204,7 @@ void abspath(const char *path)
 
 	report_path(ready.mem);
 
+terminate:
 	path_buff_free(&buff);
 	path_buff_free(&toresolve);
 	path_buff_free(&link);
