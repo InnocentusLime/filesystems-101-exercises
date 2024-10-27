@@ -79,6 +79,21 @@ static void path_buff_free(struct path_buff* buff)
 	buff->sz = 0;
 }
 
+static void path_buff_up(struct path_buff* buff)
+{
+	if (buff->sz == 0)
+	{
+		return;
+	}
+
+	buff->sz -= 2;
+	while (buff->mem[buff->sz] != '/') {
+		buff->sz--;
+	}
+
+	buff->mem[++buff->sz] = '\0';
+}
+
 static ssize_t x_readlink(
 	struct path_buff *restrict path,
 	struct path_buff *restrict buff
@@ -143,6 +158,12 @@ void abspath(const char *path)
 
 		if (strcmp(child, ".") == 0)
 		{
+			continue;
+		}
+
+		if (strcmp(child, "..") == 0)
+		{
+			path_buff_up(&ready);
 			continue;
 		}
 
