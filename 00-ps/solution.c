@@ -228,8 +228,7 @@ void ps(void)
 		{
 			continue;
 		}
-
-		split_record(arg_buff.mem, arglen, &envp);
+		split_record(arg_buff.mem, arglen, &argv);
 
 		/* Parse the env */
 		snprintf(path, BUFFER_SIZE, "/proc/%d/environ", pid);
@@ -238,7 +237,7 @@ void ps(void)
 		{
 			continue;
 		}
-		split_record(env_buff.mem, envlen, &argv);
+		split_record(env_buff.mem, envlen, &envp);
 
 		report_process(pid, exe_buff.mem, argv.mem, envp.mem);
 	}
