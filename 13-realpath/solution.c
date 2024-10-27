@@ -152,11 +152,6 @@ void abspath(const char *path)
 		}
 		*p = '\0';
 
-		if (p == child)
-		{
-			break;
-		}
-
 		if (strcmp(child, ".") == 0)
 		{
 			continue;
