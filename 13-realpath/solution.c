@@ -123,11 +123,17 @@ void abspath(const char *path)
 			++child_ptr;
 		}
 
+		child[0] = '\0';
 		for (p = child; *child_ptr != '/' && *child_ptr != '\0';)
 		{
 			*(p++) = *(child_ptr++);
 		}
 		*p = 0;
+
+		if (strcmp(child, "") == 0)
+		{
+			goto next;
+		}
 
 		if (strcmp(child, ".") == 0)
 		{
@@ -177,12 +183,26 @@ next:
 
 	free(parent);
 	parent = getcwd(NULL, 0);
+
 	path_buff_set(&buff, parent);
 	if (buff.sz > 1)
 	{
 		path_buff_push(&buff, "/");
 	}
 	path_buff_push(&buff, child);
+
+	if (strcmp(child, "") != 0)
+	{
+		if (lstat(child, &st) < 0)
+		{
+			report_error(parent, child, errno);
+			goto terminate;
+		}
+		if (S_ISDIR(st.st_mode))
+		{
+			path_buff_push(&buff, "/");
+		}
+	}
 
 	report_path(buff.mem);
 
