@@ -36,24 +36,31 @@ static void path_buff_grow(struct path_buff* buff)
 	buff->cap *= 2;
 }
 
-static void path_buff_push(struct path_buff* buff, const char* src)
+static void path_buff_cpy_push(
+	struct path_buff *buff,
+	const char* data,
+	size_t amount
+)
 {
-	size_t extra = strlen(src);
-
-	while (buff->cap - buff->sz < extra + 1)
+	while (buff->cap - buff->sz < amount + 1)
 	{
 		path_buff_grow(buff);
 	}
 
-	strcpy(buff->mem + buff->sz, src);
-	buff->sz += extra;
+	memcpy(buff->mem + buff->sz, data, amount);
+	buff->sz += amount;
+	buff->mem[buff->sz] = '\0';
+}
+
+static void path_buff_push(struct path_buff* buff, const char* src)
+{
+	size_t amount = strlen(src);
+	path_buff_cpy_push(buff, src, amount);
 }
 
 static void path_buff_put_char(struct path_buff* buff, char ch)
 {
-	char tmp[2] = { ch, '\0' };
-
-	path_buff_push(buff, tmp);
+	path_buff_cpy_push(buff, &ch, 1);
 }
 
 static void path_buff_set(struct path_buff* buff, const char* src)
@@ -71,20 +78,15 @@ static void path_buff_free(struct path_buff* buff)
 	buff->sz = 0;
 }
 
-static char path_buff_last_char(const struct path_buff* buff)
-{
-	return buff->mem[buff->sz];
-}
-
 static ssize_t x_readlink(
-	const char *restrict pathname,
+	struct path_buff *restrict path,
 	struct path_buff *restrict buff
 )
 {
 	int err;
 	ssize_t n;
 
-	while ((n = readlink(pathname, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
+	while ((n = readlink(path->mem, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
 	{
 		path_buff_grow(buff);
 	}
@@ -92,7 +94,7 @@ static ssize_t x_readlink(
 	err = errno;
 	if (n < 0)
 	{
-		report_error("STUB", pathname, err);
+		report_error("ERR2", "", err);
 	}
 	else
 	{
@@ -107,83 +109,81 @@ static ssize_t x_readlink(
 void abspath(const char *path)
 {
 	int err;
-	char ch;
-	const char* remaining = NULL;
-	struct path_buff prefix, linkbuff;
 	struct stat st;
+	struct path_buff resolved_path, buff, childbuff, linkbuff, constructed_path;
+	char *child, *child_end;
 
-	remaining = path;
-	prefix = path_buff_new();
+	constructed_path = path_buff_new();
+	resolved_path = path_buff_new();
+	buff = path_buff_new();
+	childbuff = path_buff_new();
 	linkbuff = path_buff_new();
 
-	path_buff_put_char(&prefix, '/');
-
-	if (*remaining == '/')
+	path_buff_put_char(&resolved_path, '/');
+	while (*path == '/')
 	{
-		remaining++;
+		path++;
 	}
+	path_buff_push(&resolved_path, path);
 
-	while ((ch = *(remaining++)))
+	child = resolved_path.mem;
+
+	while (1)
 	{
-		if (ch != '/')
+		/* 0. Nudge if we are on a slash */
+		while (*(child++) == '/') { }
+
+		/* 1. locate child */
+		child_end = child;
+		while (*child_end != '\0' && *child_end != '/')
 		{
-			path_buff_put_char(&prefix, ch);
-			continue;
+			child_end++;
 		}
 
-		if (lstat(prefix.mem, &st) < 0)
+		if (child == child_end)
+		{
+			break; // we failed to progress
+		}
+
+		path_buff_set(&childbuff, "");
+		path_buff_cpy_push(&childbuff, child, child_end - child);
+
+		/* 2. lstat child by its absolute path */
+		path_buff_set(&buff, "");
+		path_buff_cpy_push(&buff, resolved_path.mem, child_end - resolved_path.mem);
+		if (lstat(buff.mem, &st) < 0)
 		{
 			err = errno;
-			report_error("STUB", prefix.mem, err);
+			report_error("ERR1", childbuff.mem, err);
 			return;
 		}
 
-		if (st.st_mode & S_IFDIR)
+		/* 3. check */
+		if (!S_ISLNK(st.st_mode))
 		{
-			path_buff_put_char(&prefix, '/');
-			continue; /* All good */
+			child = child_end;
+			continue;
 		}
 
-		if (!(st.st_mode & S_IFLNK))
+		/* 4. symlinks make us backtrack */
+		if (x_readlink(&buff, &linkbuff) < 0)
 		{
-			if (*(remaining + 1))
-			{
-				printf("File neither dir or link. And it's not done. I am confused.\n");
-				return;
-			}
-			else
-			{
-				/* It may be us finally reaching the end */
-				continue;
-			}
+			return;
 		}
 
-		if (x_readlink(prefix.mem, &linkbuff) < 0)
-		{
-			break;
-		}
+		path_buff_set(&buff, "");
+		path_buff_push(&buff, linkbuff.mem);
+		path_buff_push(&buff, child_end);
+		path_buff_set(&resolved_path, buff.mem);
 
-		path_buff_set(&prefix, linkbuff.mem);
-		if (path_buff_last_char(&linkbuff) != '/')
-		{
-			path_buff_put_char(&prefix, '/');
-		}
+		child = resolved_path.mem;
 	}
 
-	if (lstat(prefix.mem, &st) < 0)
-	{
-		err = errno;
-		report_error("STUB", prefix.mem, err);
-		return;
-	}
+	report_path(resolved_path.mem);
 
-	if (st.st_mode & S_IFDIR)
-	{
-		path_buff_put_char(&prefix, '/');
-	}
-
-	report_path(prefix.mem);
-
-	path_buff_free(&prefix);
+	path_buff_free(&resolved_path);
+	path_buff_free(&buff);
 	path_buff_free(&linkbuff);
+	path_buff_free(&childbuff);
+	path_buff_free(&constructed_path);
 }
