@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <fcntl.h>
 
 #define START_CAP 64
 #define BUFF_SIZE 255
@@ -59,11 +60,6 @@ static void path_buff_push(struct path_buff* buff, const char* src)
 	path_buff_cpy_push(buff, src, amount);
 }
 
-static void path_buff_put_char(struct path_buff* buff, char ch)
-{
-	path_buff_cpy_push(buff, &ch, 1);
-}
-
 static void path_buff_set(struct path_buff* buff, const char* src)
 {
 	buff->sz = 0;
@@ -92,14 +88,15 @@ static void path_buff_up(struct path_buff* buff)
 	buff->mem[++buff->sz] = '\0';
 }
 
-static ssize_t x_readlink(
-	struct path_buff *restrict path,
+static ssize_t x_readlinkat(
+	int fd,
+	const char* child,
 	struct path_buff *restrict buff
 )
 {
 	ssize_t n;
 
-	while ((n = readlink(path->mem, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
+	while ((n = readlinkat(fd, child, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
 	{
 		path_buff_grow(buff);
 	}
@@ -120,26 +117,32 @@ static ssize_t x_readlink(
 
 void abspath(const char *path)
 {
-	int err;
+	int currdir, nextdir;
 	char child[BUFF_SIZE + 1], *child_ptr, *p;
 	struct stat st;
-	struct path_buff ready, toresolve, link, buff;
+	struct path_buff ready, toresolve, link;
 
 	ready = path_buff_new();
 	toresolve = path_buff_new();
 	link = path_buff_new();
-	buff = path_buff_new();
 
 	path_buff_set(&toresolve, "/");
 	path_buff_push(&toresolve, path);
 	path_buff_set(&ready, "/");
 
 	child_ptr = toresolve.mem;
+	currdir = open("/", O_RDONLY);
+	assert(currdir >= 0);
 
 	while (1)
 	{
 		while (*child_ptr == '/') {
 			++child_ptr;
+		}
+
+		if (*child_ptr == '\0')
+		{
+			break;
 		}
 
 		p = child;
@@ -162,50 +165,57 @@ void abspath(const char *path)
 		if (strcmp(child, "..") == 0)
 		{
 			path_buff_up(&ready);
+			currdir = open(ready.mem, O_RDONLY | O_NOFOLLOW);
+			assert(currdir >= 0);
 			continue;
 		}
 
-		path_buff_set(&buff, "");
-		path_buff_push(&buff, ready.mem);
-		path_buff_push(&buff, child);
-		if (lstat(buff.mem, &st) < 0)
+		if (fstatat(currdir, child, &st, AT_SYMLINK_NOFOLLOW) < 0)
 		{
-			err = errno;
-			report_error(ready.mem, child, err);
+			report_error(ready.mem, child, errno);
 			goto terminate;
-		}
-
-		path_buff_push(&ready, child);
-
-		if (S_ISDIR(st.st_mode))
-		{
-			path_buff_put_char(&ready, '/');
-			continue;
 		}
 
 		if (!S_ISLNK(st.st_mode))
 		{
+			if (!*child_ptr && !S_ISDIR(st.st_mode))
+			{
+				path_buff_push(&ready, child);
+				break;
+			}
+
+			/* change dir */
+			nextdir = openat(currdir, child, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+			if (nextdir < 0)
+			{
+				report_error(ready.mem, child, errno);
+				goto terminate;
+			}
+			currdir = nextdir;
+
+			path_buff_push(&ready, child);
+			path_buff_push(&ready, "/");
 			continue;
 		}
 
-		if (x_readlink(&buff, &link) < 0)
+		if (x_readlinkat(currdir, child, &link) < 0)
 		{
 			goto terminate;
 		}
 
-		path_buff_set(&buff, "");
-		path_buff_push(&buff, link.mem);
-		path_buff_push(&buff, child_ptr);
-		path_buff_set(&toresolve, buff.mem);
+		path_buff_push(&link, child_ptr);
+		path_buff_set(&toresolve, link.mem);
 		path_buff_set(&ready, "/");
 
 		child_ptr = toresolve.mem;
+
+		currdir = open("/", O_RDONLY);
+		assert(currdir >= 0);
 	}
 
 	report_path(ready.mem);
 
 terminate:
-	path_buff_free(&buff);
 	path_buff_free(&toresolve);
 	path_buff_free(&link);
 	path_buff_free(&ready);
