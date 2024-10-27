@@ -81,17 +81,12 @@ static void path_buff_free(struct path_buff* buff)
 
 static void path_buff_up(struct path_buff* buff)
 {
-	if (buff->sz == 0)
+	if (buff->sz <= 1)
 	{
 		return;
 	}
 
 	buff->sz--;
-	if (buff->sz == 0)
-	{
-		return;
-	}
-
 	while (buff->mem[--buff->sz] != '/') {}
 
 	buff->mem[++buff->sz] = '\0';
