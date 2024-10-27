@@ -59,6 +59,11 @@ static void path_buff_push(struct path_buff* buff, const char* src)
 	path_buff_cpy_push(buff, src, amount);
 }
 
+static void path_buff_put_char(struct path_buff* buff, char ch)
+{
+	path_buff_cpy_push(buff, &ch, 1);
+}
+
 static void path_buff_set(struct path_buff* buff, const char* src)
 {
 	buff->sz = 0;
@@ -74,14 +79,27 @@ static void path_buff_free(struct path_buff* buff)
 	buff->sz = 0;
 }
 
+static void path_buff_up(struct path_buff* buff)
+{
+	if (buff->sz <= 1)
+	{
+		return;
+	}
+
+	buff->sz--;
+	while (buff->mem[--buff->sz] != '/') {}
+
+	buff->mem[++buff->sz] = '\0';
+}
+
 static ssize_t x_readlink(
-	const char *restrict path,
+	struct path_buff *restrict path,
 	struct path_buff *restrict buff
 )
 {
 	ssize_t n;
 
-	while ((n = readlink(path, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
+	while ((n = readlink(path->mem, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
 	{
 		path_buff_grow(buff);
 	}
@@ -102,112 +120,93 @@ static ssize_t x_readlink(
 
 void abspath(const char *path)
 {
-	char child[BUFF_SIZE + 1], *child_ptr, *p, *parent = NULL;
+	int err;
+	char child[BUFF_SIZE + 1], *child_ptr, *p;
 	struct stat st;
-	struct path_buff toresolve, buff;
+	struct path_buff ready, toresolve, link, buff;
 
+	ready = path_buff_new();
 	toresolve = path_buff_new();
+	link = path_buff_new();
 	buff = path_buff_new();
 
 	path_buff_set(&toresolve, "/");
 	path_buff_push(&toresolve, path);
+	path_buff_set(&ready, "/");
 
 	child_ptr = toresolve.mem;
 
-	assert(chdir("/") == 0);
-
-	while (*child_ptr)
+	while (1)
 	{
-		while (*child_ptr == '/')
-		{
+		while (*child_ptr == '/') {
 			++child_ptr;
 		}
 
-		child[0] = '\0';
-		for (p = child; *child_ptr != '/' && *child_ptr != '\0';)
+		p = child;
+		while (*child_ptr != '/' && *child_ptr != '\0')
 		{
 			*(p++) = *(child_ptr++);
 		}
-		*p = 0;
+		*p = '\0';
 
-		if (strcmp(child, "") == 0)
+		if (p == child)
 		{
-			goto next;
+			break;
 		}
 
 		if (strcmp(child, ".") == 0)
 		{
-			goto next;
+			continue;
 		}
 
 		if (strcmp(child, "..") == 0)
 		{
-			assert(chdir("..") == 0);
-			goto next;
+			path_buff_up(&ready);
+			continue;
 		}
 
-		parent = getcwd(NULL, 0);
-
-		if (lstat(child, &st) < 0)
+		path_buff_set(&buff, "");
+		path_buff_push(&buff, ready.mem);
+		path_buff_push(&buff, child);
+		if (lstat(buff.mem, &st) < 0)
 		{
-			report_error(parent, child, errno);
+			err = errno;
+			report_error(ready.mem, child, err);
 			goto terminate;
+		}
+
+		path_buff_push(&ready, child);
+
+		if (S_ISDIR(st.st_mode))
+		{
+			path_buff_put_char(&ready, '/');
+			continue;
 		}
 
 		if (!S_ISLNK(st.st_mode))
 		{
-			if (*child_ptr == '\0')
-			{
-				goto next;
-			}
-
-			if(chdir(child) < 0)
-			{
-				report_error(parent, child, errno);
-				goto terminate;
-			}
-
-			goto next;
+			continue;
 		}
 
-		x_readlink(child, &buff);
-		path_buff_push(&buff, child_ptr);
-		path_buff_set(&toresolve, buff.mem);
-
-		child_ptr = toresolve.mem;
-		assert(chdir("/") == 0);
-
-next:
-		free(parent); parent = NULL;
-	}
-
-	free(parent);
-	parent = getcwd(NULL, 0);
-
-	path_buff_set(&buff, parent);
-	if (buff.sz > 1)
-	{
-		path_buff_push(&buff, "/");
-	}
-	path_buff_push(&buff, child);
-
-	if (strcmp(child, "") != 0)
-	{
-		if (lstat(child, &st) < 0)
+		if (x_readlink(&buff, &link) < 0)
 		{
-			report_error(parent, child, errno);
 			goto terminate;
 		}
-		if (S_ISDIR(st.st_mode))
-		{
-			path_buff_push(&buff, "/");
-		}
+
+		path_buff_set(&buff, "");
+		path_buff_push(&buff, link.mem);
+		path_buff_push(&buff, child_ptr);
+		path_buff_set(&toresolve, buff.mem);
+		path_buff_set(&ready, "/");
+
+		child_ptr = toresolve.mem;
 	}
 
-	report_path(buff.mem);
+	report_path(ready.mem);
 
 terminate:
-	path_buff_free(&toresolve);
 	path_buff_free(&buff);
-	free(parent);
+	path_buff_free(&toresolve);
+	path_buff_free(&link);
+	path_buff_free(&ready);
 }
