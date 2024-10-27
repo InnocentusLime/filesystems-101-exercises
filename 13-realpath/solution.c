@@ -141,6 +141,11 @@ void abspath(const char *path)
 			break;
 		}
 
+		if (strcmp(child, ".") == 0)
+		{
+			continue;
+		}
+
 		path_buff_set(&buff, "");
 		path_buff_push(&buff, ready.mem);
 		path_buff_push(&buff, child);
