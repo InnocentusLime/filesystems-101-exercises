@@ -84,7 +84,6 @@ static ssize_t x_readlink(
 	struct path_buff *restrict buff
 )
 {
-	int err;
 	ssize_t n;
 
 	while ((n = readlink(path->mem, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
@@ -92,10 +91,9 @@ static ssize_t x_readlink(
 		path_buff_grow(buff);
 	}
 
-	err = errno;
 	if (n < 0)
 	{
-		report_error("ERR2", "", err);
+		assert(0);
 	}
 	else
 	{
