@@ -178,7 +178,10 @@ next:
 	free(parent);
 	parent = getcwd(NULL, 0);
 	path_buff_set(&buff, parent);
-	path_buff_push(&buff, "/");
+	if (buff.sz > 1)
+	{
+		path_buff_push(&buff, "/");
+	}
 	path_buff_push(&buff, child);
 
 	report_path(buff.mem);
