@@ -86,10 +86,13 @@ static void path_buff_up(struct path_buff* buff)
 		return;
 	}
 
-	buff->sz -= 2;
-	while (buff->mem[buff->sz] != '/') {
-		buff->sz--;
+	buff->sz--;
+	if (buff->sz == 0)
+	{
+		return;
 	}
+
+	while (buff->mem[--buff->sz] != '/') {}
 
 	buff->mem[++buff->sz] = '\0';
 }
