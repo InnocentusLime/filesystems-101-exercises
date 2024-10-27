@@ -8,6 +8,7 @@
 #include <stdio.h>
 
 #define START_CAP 64
+#define BUFF_SIZE 255
 
 struct path_buff
 {
@@ -109,81 +110,80 @@ static ssize_t x_readlink(
 void abspath(const char *path)
 {
 	int err;
+	char child[BUFF_SIZE + 1], *child_ptr, *p;
 	struct stat st;
-	struct path_buff resolved_path, buff, childbuff, linkbuff, constructed_path;
-	char *child, *child_end;
+	struct path_buff ready, toresolve, link, buff;
 
-	constructed_path = path_buff_new();
-	resolved_path = path_buff_new();
+	ready = path_buff_new();
+	toresolve = path_buff_new();
+	link = path_buff_new();
 	buff = path_buff_new();
-	childbuff = path_buff_new();
-	linkbuff = path_buff_new();
 
-	path_buff_put_char(&resolved_path, '/');
-	while (*path == '/')
-	{
-		path++;
-	}
-	path_buff_push(&resolved_path, path);
+	path_buff_set(&toresolve, "/");
+	path_buff_push(&toresolve, path);
+	path_buff_set(&ready, "/");
 
-	child = resolved_path.mem;
+	child_ptr = toresolve.mem;
 
 	while (1)
 	{
-		/* 0. Nudge if we are on a slash */
-		while (*(child++) == '/') { }
-
-		/* 1. locate child */
-		child_end = child;
-		while (*child_end != '\0' && *child_end != '/')
-		{
-			child_end++;
+		while (*child_ptr == '/') {
+			++child_ptr;
 		}
 
-		if (child == child_end)
+		p = child;
+		while (*child_ptr != '/' && *child_ptr != '\0')
 		{
-			break; // we failed to progress
+			*(p++) = *(child_ptr++);
+		}
+		*p = '\0';
+
+		if (p == child)
+		{
+			break;
 		}
 
-		path_buff_set(&childbuff, "");
-		path_buff_cpy_push(&childbuff, child, child_end - child);
-
-		/* 2. lstat child by its absolute path */
 		path_buff_set(&buff, "");
-		path_buff_cpy_push(&buff, resolved_path.mem, child_end - resolved_path.mem);
+		path_buff_push(&buff, ready.mem);
+		path_buff_push(&buff, child);
 		if (lstat(buff.mem, &st) < 0)
 		{
 			err = errno;
-			report_error("ERR1", childbuff.mem, err);
+			report_error(ready.mem, child, err);
 			return;
 		}
 
-		/* 3. check */
-		if (!S_ISLNK(st.st_mode))
+		path_buff_push(&ready, child);
+
+		if (S_ISDIR(st.st_mode))
 		{
-			child = child_end;
+			path_buff_put_char(&ready, '/');
 			continue;
 		}
 
-		/* 4. symlinks make us backtrack */
-		if (x_readlink(&buff, &linkbuff) < 0)
+		if (!S_ISLNK(st.st_mode))
+		{
+			continue;
+		}
+
+		if (x_readlink(&buff, &link) < 0)
 		{
 			return;
 		}
 
 		path_buff_set(&buff, "");
-		path_buff_push(&buff, linkbuff.mem);
-		path_buff_push(&buff, child_end);
-		path_buff_set(&resolved_path, buff.mem);
+		path_buff_push(&buff, link.mem);
+		path_buff_push(&buff, child_ptr);
+		path_buff_set(&toresolve, buff.mem);
+		path_buff_set(&ready, "/");
 
-		child = resolved_path.mem;
+		child_ptr = toresolve.mem;
 	}
 
-	report_path(resolved_path.mem);
+	report_path(ready.mem);
 
-	path_buff_free(&resolved_path);
 	path_buff_free(&buff);
-	path_buff_free(&linkbuff);
-	path_buff_free(&childbuff);
-	path_buff_free(&constructed_path);
+	path_buff_free(&toresolve);
+	path_buff_free(&link);
+	path_buff_free(&ready);
 }
