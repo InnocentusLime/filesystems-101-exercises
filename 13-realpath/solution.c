@@ -117,7 +117,7 @@ static ssize_t x_readlinkat(
 
 void abspath(const char *path)
 {
-	int currdir, nextdir;
+	int currdir = -1, nextdir = -1;
 	char child[BUFF_SIZE + 1], *child_ptr, *p;
 	struct stat st;
 	struct path_buff ready, toresolve, link;
@@ -159,6 +159,7 @@ void abspath(const char *path)
 
 		if (strcmp(child, "..") == 0)
 		{
+			assert(close(currdir) >= 0);
 			path_buff_up(&ready);
 			currdir = open(ready.mem, O_RDONLY | O_NOFOLLOW);
 			assert(currdir >= 0);
@@ -186,7 +187,9 @@ void abspath(const char *path)
 				report_error(ready.mem, child, errno);
 				goto terminate;
 			}
+			assert(close(currdir) >= 0);
 			currdir = nextdir;
+			nextdir = -1;
 
 			path_buff_push(&ready, child);
 			path_buff_push(&ready, "/");
@@ -204,6 +207,7 @@ void abspath(const char *path)
 
 		child_ptr = toresolve.mem;
 
+		assert(close(currdir) >= 0);
 		currdir = open("/", O_RDONLY);
 		assert(currdir >= 0);
 	}
@@ -211,6 +215,16 @@ void abspath(const char *path)
 	report_path(ready.mem);
 
 terminate:
+	if (currdir >= 0)
+	{
+		assert(close(currdir) >= 0);
+	}
+
+	if (nextdir >= 0)
+	{
+		assert(close(nextdir) >= 0);
+	}
+
 	path_buff_free(&toresolve);
 	path_buff_free(&link);
 	path_buff_free(&ready);
