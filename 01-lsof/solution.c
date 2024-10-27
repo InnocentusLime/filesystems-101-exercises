@@ -4,9 +4,45 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
+#include <assert.h>
 
 #define BUFFER_SIZE 255
+
+struct path_buff
+{
+	char* mem;
+	size_t cap;
+};
+
+struct path_buff path_buff_new()
+{
+	struct path_buff res;
+
+	res.mem = malloc(16);
+	res.cap = 16;
+
+	assert(res.mem);
+
+	return res;
+}
+
+void path_buff_grow(struct path_buff *buff)
+{
+	// realloc promises to free the mem
+	char* new = realloc(buff->mem, buff->cap * 2);
+	assert(new);
+
+	buff->mem = new;
+	buff->cap *= 2;
+}
+
+void path_buff_free(struct path_buff *buff)
+{
+	free(buff->mem);
+
+	buff->cap = 0;
+	buff->mem = NULL;
+}
 
 static struct dirent* x_readdir(const char *dir, DIR *d)
 {
@@ -27,21 +63,25 @@ static struct dirent* x_readdir(const char *dir, DIR *d)
 
 static ssize_t x_readlink(
 	const char *restrict pathname,
-	char *restrict buf,
-	size_t bufsiz
+	struct path_buff *restrict buff
 )
 {
 	int err;
-	ssize_t n = readlink(pathname, buf, bufsiz);
-	err = errno;
+	ssize_t n;
 
+	while ((n = readlink(pathname, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
+	{
+		path_buff_grow(buff);
+	}
+
+	err = errno;
 	if (n < 0)
 	{
 		report_error(pathname, err);
 	}
 	else
 	{
-		buf[n] = '\0';
+		buff->mem[n] = '\0';
 	}
 
 	return n;
@@ -61,30 +101,12 @@ DIR *x_opendir(const char* name)
 	return res;
 }
 
-// int x_lstat(const char *restrict pathname, struct stat *restrict statbuf)
-// {
-// 	int err;
-// 	int n;
-
-// 	n = lstat(pathname, statbuf);
-
-// 	if (n < 0)
-// 	{
-// 		err = errno;
-// 		report_error(pathname, err);
-// 	}
-
-// 	return n;
-// }
-
-void fds_of(const char* fds, int pid)
+void fds_of(const char* fds, int pid, struct path_buff *buff)
 {
 	DIR *fdfs = NULL;
 	struct dirent *ent = NULL;
 	char fd[BUFFER_SIZE + 1];
 	int descriptor = 0;
-	// struct stat st;
-	char buff[PATH_MAX + 1];
 
 	fdfs = x_opendir(fds);
 	if (!fdfs)
@@ -102,14 +124,9 @@ void fds_of(const char* fds, int pid)
 
 		snprintf(fd, BUFFER_SIZE, "/proc/%d/fd/%d", pid, descriptor);
 
-		// if (x_lstat(fd, &st) < 0)
-		// {
-		// 	continue;
-		// }
-
-		if (x_readlink(fd, buff, PATH_MAX) >= 0)
+		if (x_readlink(fd, buff) >= 0)
 		{
-			report_file(buff);
+			report_file(buff->mem);
 		}
 	}
 
@@ -122,6 +139,7 @@ void lsof(void)
 	char fds[BUFFER_SIZE + 1];
 	struct dirent *ent = NULL;
 	int pid = 0;
+	struct path_buff buff = path_buff_new();
 
 	while ((ent = x_readdir("/proc", proc)) != NULL)
 	{
@@ -136,8 +154,9 @@ void lsof(void)
 		snprintf(fds, BUFFER_SIZE, "/proc/%d/fd", pid);
 
 		/* Do the thing */
-		fds_of(fds, pid);
+		fds_of(fds, pid, &buff);
 	}
 
 	closedir(proc);
+	path_buff_free(&buff);
 }
