@@ -127,7 +127,7 @@ char *path_format(struct path *p, const char *extra)
 	char *res = NULL, *ptr = NULL, *src = NULL;
 	size_t n = 0;
 
-	res = fs_xzalloc(p->segment_count * (BUFF_SIZE + 1) + strlen(extra) + 1);
+	res = fs_xzalloc(p->segment_count * (BUFF_SIZE + 1) + strlen(extra) + 2);
 	ptr = res;
 
 	*(ptr++) = '/';
