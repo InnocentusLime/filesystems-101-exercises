@@ -7,225 +7,243 @@
 #include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <linux/limits.h>
+#include <fs_malloc.h>
 
-#define START_CAP 64
 #define BUFF_SIZE 255
 
-struct path_buff
+struct path
 {
-	char* mem;
-	size_t cap;
-	size_t sz;
+	struct path *next;
+	char name[BUFF_SIZE + 1];
 };
 
-static struct path_buff path_buff_new()
+struct path *path_new(const char* str)
 {
-	struct path_buff res;
+	char *ch = NULL;
+	struct path *p = NULL, *head = NULL;
 
-	res.mem = calloc(START_CAP, 1);
-	res.cap = START_CAP;
-	res.sz  = 0;
-
-	return res;
-}
-
-static void path_buff_grow(struct path_buff* buff)
-{
-	char* new = realloc(buff->mem, buff->cap * 2);
-	assert(new);
-
-	buff->mem = new;
-	buff->cap *= 2;
-}
-
-static void path_buff_cpy_push(
-	struct path_buff *buff,
-	const char* data,
-	size_t amount
-)
-{
-	while (buff->cap - buff->sz < amount + 1)
+	while (*str)
 	{
-		path_buff_grow(buff);
+		while (*str == '/')
+		{
+			str++;
+		}
+
+		if (*str == '\0')
+		{
+			break;
+		}
+
+		if (!head)
+		{
+			head = fs_xzalloc(sizeof(*p));
+			p = head;
+			ch = p->name;
+		}
+		else
+		{
+			p->next = fs_xzalloc(sizeof(*p));
+			p = p->next;
+			ch = p->name;
+		}
+
+		while (*str != '/' && *str != '\0')
+		{
+			*(ch++) = *(str++);
+		}
 	}
 
-	memcpy(buff->mem + buff->sz, data, amount);
-	buff->sz += amount;
-	buff->mem[buff->sz] = '\0';
+	return head;
 }
 
-static void path_buff_push(struct path_buff* buff, const char* src)
+void path_detach(struct path *dst, struct path *until)
 {
-	size_t amount = strlen(src);
-	path_buff_cpy_push(buff, src, amount);
-}
+	assert(dst);
 
-static void path_buff_set(struct path_buff* buff, const char* src)
-{
-	buff->sz = 0;
-	path_buff_push(buff, src);
-}
-
-static void path_buff_free(struct path_buff* buff)
-{
-	free(buff->mem);
-
-	buff->mem = NULL;
-	buff->cap = 0;
-	buff->sz = 0;
-}
-
-static void path_buff_up(struct path_buff* buff)
-{
-	if (buff->sz <= 1)
+	if (!until)
 	{
 		return;
 	}
 
-	buff->sz--;
-	while (buff->mem[--buff->sz] != '/') {}
+	if (dst->next == until)
+	{
+		dst->next = NULL;
+		return;
+	}
 
-	buff->mem[++buff->sz] = '\0';
+	path_detach(dst->next, until);
+}
+
+void path_append(struct path *dst, struct path *src)
+{
+	assert(dst);
+
+	if (!dst->next)
+	{
+		dst->next = src;
+		return;
+	}
+
+	path_append(dst->next, src);
+}
+
+void path_free(struct path* p)
+{
+	if (!p)
+	{
+		return;
+	}
+
+	path_free(p->next);
+	p->next = NULL;
+	fs_xfree(p);
 }
 
 static ssize_t x_readlinkat(
 	int fd,
 	const char* child,
-	struct path_buff *restrict buff
+	char *restrict buff
 )
 {
-	ssize_t n;
-
-	while ((n = readlinkat(fd, child, buff->mem, buff->cap - 1)) == (ssize_t)(buff->cap - 1))
-	{
-		path_buff_grow(buff);
-	}
+	ssize_t n = readlinkat(fd, child, buff, PATH_MAX);
 
 	if (n < 0)
 	{
-		assert(0);
+		exit(1);
 	}
 	else
 	{
-		buff->mem[n] = '\0';
+		buff[n] = '\0';
 	}
-
-	buff->sz = n;
 
 	return n;
 }
 
+char *path_format(const struct path *p)
+{
+	const struct path *ptr = p;
+	size_t sz = 1;
+	char *res = NULL, *ch = NULL;
+
+	for (ptr = p; ptr; ptr = ptr->next)
+	{
+		sz += 1;
+		sz += strlen(ptr->name);
+	}
+
+	res = fs_xmalloc(sz);
+	ch = res;
+
+	for (ptr = p; ptr; ptr = ptr->next)
+	{
+		*(ch++) = '/';
+		strcpy(ch, ptr->name);
+		ch += strlen(ptr->name);
+	}
+
+	return res;
+}
+
 void abspath(const char *path)
 {
+	char link[PATH_MAX + 1], *res = NULL;
 	int currdir = -1, nextdir = -1;
-	char child[BUFF_SIZE + 1], *child_ptr, *p;
 	struct stat st;
-	struct path_buff ready, toresolve, link;
+	struct path *toresolve, *curr, *p;
 
-	ready = path_buff_new();
-	toresolve = path_buff_new();
-	link = path_buff_new();
+	toresolve = path_new(path);
+	curr = toresolve;
 
-	path_buff_set(&toresolve, "/");
-	path_buff_push(&toresolve, path);
-	path_buff_set(&ready, "/");
-
-	child_ptr = toresolve.mem;
 	currdir = open("/", O_RDONLY);
 	assert(currdir >= 0);
 
-	while (1)
+	while (curr)
 	{
-		while (*child_ptr == '/') {
-			++child_ptr;
-		}
-
-		if (*child_ptr == '\0')
+		if (strcmp(curr->name, ".") == 0)
 		{
-			break;
-		}
-
-		p = child;
-		while (*child_ptr != '/' && *child_ptr != '\0')
-		{
-			*(p++) = *(child_ptr++);
-		}
-		*p = '\0';
-
-		if (strcmp(child, ".") == 0)
-		{
+			curr = curr->next;
 			continue;
 		}
 
-		if (strcmp(child, "..") == 0)
+		if (strcmp(curr->name, "..") == 0)
 		{
-			assert(close(currdir) >= 0);
-			path_buff_up(&ready);
-			currdir = open(ready.mem, O_RDONLY | O_NOFOLLOW);
-			assert(currdir >= 0);
+			nextdir = openat(currdir, "..", O_RDONLY | O_NOFOLLOW);
+			if (nextdir < 0)
+			{
+				report_error("STUB1", curr->name, errno);
+				goto terminate;
+			}
+
+			close(currdir);
+			currdir = nextdir;
+			nextdir = -1;
+
+			curr = curr->next;
 			continue;
 		}
 
-		if (fstatat(currdir, child, &st, AT_SYMLINK_NOFOLLOW) < 0)
+		if (fstatat(currdir, curr->name, &st, AT_SYMLINK_NOFOLLOW) < 0)
 		{
-			report_error(ready.mem, child, errno);
+			report_error("STUB2", curr->name, errno);
 			goto terminate;
 		}
 
 		if (!S_ISLNK(st.st_mode))
 		{
-			if (!*child_ptr && !S_ISDIR(st.st_mode))
+			if (!curr->next && !S_ISDIR(st.st_mode))
 			{
-				path_buff_push(&ready, child);
 				break;
 			}
 
 			/* change dir */
-			nextdir = openat(currdir, child, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+			nextdir = openat(currdir, curr->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 			if (nextdir < 0)
 			{
-				report_error(ready.mem, child, errno);
+				report_error("STUB3", curr->name, errno);
 				goto terminate;
 			}
-			assert(close(currdir) >= 0);
+
+			close(currdir);
 			currdir = nextdir;
 			nextdir = -1;
 
-			path_buff_push(&ready, child);
-			path_buff_push(&ready, "/");
+			curr = curr->next;
 			continue;
 		}
 
-		if (x_readlinkat(currdir, child, &link) < 0)
+		if (x_readlinkat(currdir, curr->name, link) < 0)
 		{
 			goto terminate;
 		}
 
-		path_buff_push(&link, child_ptr);
-		path_buff_set(&toresolve, link.mem);
-		path_buff_set(&ready, "/");
+		p = path_new(link);
+		path_append(p, curr->next);
+		path_detach(toresolve, curr->next);
+		path_free(toresolve);
+		curr = p;
+		toresolve = p;
 
-		child_ptr = toresolve.mem;
-
-		assert(close(currdir) >= 0);
+		close(currdir);
 		currdir = open("/", O_RDONLY);
 		assert(currdir >= 0);
 	}
 
-	report_path(ready.mem);
+	res = path_format(toresolve);
+	report_path(res);
 
 terminate:
+	fs_xfree(res);
+
 	if (currdir >= 0)
 	{
-		assert(close(currdir) >= 0);
+		close(currdir);
 	}
 
 	if (nextdir >= 0)
 	{
-		assert(close(nextdir) >= 0);
+		close(nextdir);
 	}
 
-	path_buff_free(&toresolve);
-	path_buff_free(&link);
-	path_buff_free(&ready);
+	path_free(toresolve);
 }
