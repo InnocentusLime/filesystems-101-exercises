@@ -194,11 +194,13 @@ void abspath(const char *path)
 		if (strcmp(name, ".") == 0)
 		{
 			n++;
+			name = "";
 			continue;
 		}
 
 		if (strcmp(name, "..") == 0)
 		{
+			name = "";
 			nextdir = openat(currdir, "..", O_RDONLY | O_NOFOLLOW);
 			if (nextdir < 0)
 			{
