@@ -106,31 +106,48 @@ void path_grow(struct path **p)
 
 void path_push(struct path **p, const char *add)
 {
+	size_t n = 0;
+
 	if ((*p)->segment_count == (*p)->segment_cap)
 	{
 		path_grow(p);
 	}
 
-	strcpy((*p)->segments[(*p)->segment_count++].name, add);
+	// Why in all hell is strcpy banned? Oh well.
+	for (n = 0; n < BUFF_SIZE && add[n]; n++)
+	{
+		(*p)->segments[(*p)->segment_count].name[n] = add[n];
+	}
+	(*p)->segments[(*p)->segment_count].name[n] = '\0';
+	((*p)->segment_count)++;
 }
 
 char *path_format(struct path *p, const char *extra)
 {
-	char *res = NULL, *ptr = NULL;
+	char *res = NULL, *ptr = NULL, *src = NULL;
 	size_t n = 0;
 
 	res = fs_xzalloc(p->segment_count * (BUFF_SIZE + 1) + strlen(extra) + 1);
 	ptr = res;
 
 	*(ptr++) = '/';
+	// This used to be cleaner, but strcpy got banned.
+	// I also refuse to allocate in a loop, when I can easily compute the size
+	// of my allocation
 	for (n = 0; n < p->segment_count; ++n)
 	{
-		strcpy(ptr, p->segments[n].name);
-		ptr += strlen(p->segments[n].name);
+		src = p->segments[n].name;
+		while (*src)
+		{
+			*(ptr++) = *(src++);
+		}
 		*(ptr++) = '/';
 	}
 
-	strcpy(ptr, extra);
+	while (*extra)
+	{
+		*(ptr++) = *(extra++);
+	}
 
 	return res;
 }
