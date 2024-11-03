@@ -12,92 +12,127 @@
 
 #define BUFF_SIZE 255
 
-struct path
+struct path_segment
 {
-	struct path *next;
 	char name[BUFF_SIZE + 1];
 };
 
-struct path *path_new(const char* str)
+struct path
 {
-	char *ch = NULL;
-	struct path *p = NULL, *head = NULL;
+	size_t segment_count;
+	size_t segment_cap;
+	struct path_segment segments[];
+};
 
-	while (*str)
+struct path *path_empty(size_t cap)
+{
+	struct path *res = NULL;
+
+	res = fs_xzalloc(
+		sizeof(struct path) +
+		cap * sizeof(struct path_segment)
+	);
+	res->segment_cap = cap;
+
+	return res;
+}
+
+struct path *path_new(const char *str)
+{
+	struct path *res = NULL;
+	size_t segment_count = 0, n = 0;
+	const char *segments[PATH_MAX], **curr = NULL, *p = NULL;
+	char *out = NULL;
+
+	memset(segments, 0, sizeof(segments));
+	for (p = str, curr = segments ; *p ;)
 	{
-		while (*str == '/')
+		while (*p == '/')
 		{
-			str++;
+			p++;
 		}
 
-		if (*str == '\0')
+		if (!*p)
 		{
 			break;
 		}
 
-		if (!head)
-		{
-			head = fs_xzalloc(sizeof(*p));
-			p = head;
-			ch = p->name;
-		}
-		else
-		{
-			p->next = fs_xzalloc(sizeof(*p));
-			p = p->next;
-			ch = p->name;
-		}
+		segment_count++;
+		*(curr++) = p;
 
-		while (*str != '/' && *str != '\0')
+		while (*p != '/' && *p != '\0')
 		{
-			*(ch++) = *(str++);
+			p++;
 		}
 	}
 
-	return head;
+	res = path_empty(segment_count);
+	res->segment_count = segment_count;
+	for (; n < segment_count; ++n)
+	{
+		for (out = res->segments[n].name; *(segments[n]) != '/' && *(segments[n]) != '\0'; ++out)
+		{
+			*out = *(segments[n]++);
+		}
+	}
+
+	return res;
 }
 
-void path_detach(struct path *dst, struct path *until)
+void path_pop(struct path *p)
 {
-	assert(dst);
-
-	if (!until)
+	if (!p->segment_count)
 	{
 		return;
 	}
 
-	if (dst->next == until)
-	{
-		dst->next = NULL;
-		return;
-	}
-
-	path_detach(dst->next, until);
+	p->segment_count--;
 }
 
-void path_append(struct path *dst, struct path *src)
+void path_clear(struct path *p)
 {
-	assert(dst);
-
-	if (!dst->next)
-	{
-		dst->next = src;
-		return;
-	}
-
-	path_append(dst->next, src);
+	p->segment_count = 0;
 }
 
-void path_free(struct path* p)
+void path_grow(struct path **p)
 {
-	if (!p)
+	(*p)->segment_cap *= 2;
+	*p = fs_xrealloc(
+		*p,
+		sizeof(struct path) +
+		(*p)->segment_cap * sizeof(struct path_segment)
+	);
+}
+
+void path_push(struct path **p, const char *add)
+{
+	if ((*p)->segment_count == (*p)->segment_cap)
 	{
-		return;
+		path_grow(p);
 	}
 
-	path_free(p->next);
-	p->next = NULL;
-	fs_xfree(p);
+	strcpy((*p)->segments[(*p)->segment_count++].name, add);
+}
+
+char *path_format(struct path *p, const char *extra)
+{
+	char *res = NULL, *ptr = NULL;
+	size_t n = 0;
+
+	res = fs_xzalloc(p->segment_count * (BUFF_SIZE + 1) + strlen(extra) + 1);
+	ptr = res;
+
+	*(ptr++) = '/';
+	for (n = 0; n < p->segment_count; ++n)
+	{
+		strcpy(ptr, p->segments[n].name);
+		ptr += strlen(p->segments[n].name);
+		*(ptr++) = '/';
+	}
+
+	strcpy(ptr, extra);
+
+	return res;
 }
 
 static ssize_t x_readlinkat(
@@ -120,121 +155,108 @@ static ssize_t x_readlinkat(
 	return n;
 }
 
-char *path_format(const struct path *p)
-{
-	const struct path *ptr = p;
-	size_t sz = 1;
-	char *res = NULL, *ch = NULL;
-
-	for (ptr = p; ptr; ptr = ptr->next)
-	{
-		sz += 1;
-		sz += strlen(ptr->name);
-	}
-
-	res = fs_xmalloc(sz);
-	ch = res;
-
-	for (ptr = p; ptr; ptr = ptr->next)
-	{
-		*(ch++) = '/';
-		strcpy(ch, ptr->name);
-		ch += strlen(ptr->name);
-	}
-
-	return res;
-}
-
 void abspath(const char *path)
 {
-	char link[PATH_MAX + 1], *res = NULL;
+	char link[PATH_MAX + 1], *name = "", *out = NULL;
 	int currdir = -1, nextdir = -1;
+	size_t n = 0;
 	struct stat st;
-	struct path *toresolve, *curr, *p;
+	struct path *toresolve, *ready, *tmp;
 
 	toresolve = path_new(path);
-	curr = toresolve;
+	ready = path_empty(8);
+	tmp = NULL;
 
 	currdir = open("/", O_RDONLY);
 	assert(currdir >= 0);
 
-	while (curr)
+	while (n < toresolve->segment_count)
 	{
-		if (strcmp(curr->name, ".") == 0)
+		name = toresolve->segments[n].name;
+
+		if (strcmp(name, ".") == 0)
 		{
-			curr = curr->next;
+			n++;
 			continue;
 		}
 
-		if (strcmp(curr->name, "..") == 0)
+		if (strcmp(name, "..") == 0)
 		{
 			nextdir = openat(currdir, "..", O_RDONLY | O_NOFOLLOW);
 			if (nextdir < 0)
 			{
-				report_error("STUB1", curr->name, errno);
+				out = path_format(ready, "");
+				report_error(out, name, errno);
 				goto terminate;
 			}
 
 			close(currdir);
+
 			currdir = nextdir;
 			nextdir = -1;
-
-			curr = curr->next;
+			path_pop(ready);
+			n++;
 			continue;
 		}
 
-		if (fstatat(currdir, curr->name, &st, AT_SYMLINK_NOFOLLOW) < 0)
+		if (fstatat(currdir, name, &st, AT_SYMLINK_NOFOLLOW) < 0)
 		{
-			report_error("STUB2", curr->name, errno);
+			out = path_format(ready, "");
+			report_error(out, name, errno);
 			goto terminate;
 		}
 
 		if (!S_ISLNK(st.st_mode))
 		{
-			if (!curr->next && !S_ISDIR(st.st_mode))
+			if (n == toresolve->segment_count - 1 && !S_ISDIR(st.st_mode))
 			{
 				break;
 			}
 
 			/* change dir */
-			nextdir = openat(currdir, curr->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+			path_push(&ready, name);
+			nextdir = openat(currdir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 			if (nextdir < 0)
 			{
-				report_error("STUB3", curr->name, errno);
+				out = path_format(ready, "");
+				report_error(out, name, errno);
 				goto terminate;
 			}
 
 			close(currdir);
 			currdir = nextdir;
 			nextdir = -1;
+			n++;
+			name = "";
 
-			curr = curr->next;
 			continue;
 		}
 
-		if (x_readlinkat(currdir, curr->name, link) < 0)
+		if (x_readlinkat(currdir, name, link) < 0)
 		{
 			goto terminate;
 		}
 
-		p = path_new(link);
-		path_append(p, curr->next);
-		path_detach(toresolve, curr->next);
-		path_free(toresolve);
-		curr = p;
-		toresolve = p;
+		tmp = path_new(link);
+		for (n++; n < toresolve->segment_count; ++n)
+		{
+			path_push(&tmp, toresolve->segments[n].name);
+		}
+		fs_xfree(toresolve);
+		toresolve = tmp;
+		tmp = NULL;
+		n = 0;
+		path_clear(ready);
 
 		close(currdir);
 		currdir = open("/", O_RDONLY);
 		assert(currdir >= 0);
 	}
 
-	res = path_format(toresolve);
-	report_path(res);
+	out = path_format(ready, name);
+	report_path(out);
 
 terminate:
-	fs_xfree(res);
-
 	if (currdir >= 0)
 	{
 		close(currdir);
@@ -245,5 +267,8 @@ terminate:
 		close(nextdir);
 	}
 
-	path_free(toresolve);
+	fs_xfree(toresolve);
+	fs_xfree(ready);
+	fs_xfree(tmp);
+	fs_xfree(out);
 }
